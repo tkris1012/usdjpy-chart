@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="USDJPY">
+<meta name="theme-color" content="#0b0e14">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./apple-touch-icon.png">
+<title>USD/JPY チャート</title>
+<style>
+  :root {
+    --bg: #0b0e14; --panel: #121722; --line: #232a38; --text: #e6e9ef; --sub: #8a94a6;
+    --up: #26a69a; --down: #ef5350; --accent: #4da3ff;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif;
+    overflow: hidden; overscroll-behavior: none; -webkit-user-select: none; user-select: none;
+  }
+  body { position: fixed; inset: 0; }
+  #app {
+    display: flex; flex-direction: column; height: 100dvh;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  .pane { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+  .pane + .pane { border-top: 1px solid var(--line); }
+  .chart { flex: 1 1 0; min-height: 0; position: relative; }
+
+  header { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 8px 4px 10px; }
+  .sym { font-weight: 700; font-size: 15px; }
+  .price { white-space: nowrap; font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .3px; }
+  .chg { font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .up { color: var(--up); } .down { color: var(--down); }
+  .spacer { flex: 1 1 0; }
+  .status { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--sub); min-width: 0; flex: 0 1 auto; }
+  .status span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #666; flex: none; }
+  .dot.ok { background: var(--up); } .dot.warn { background: #f0b429; } .dot.err { background: var(--down); }
+  .iconbtn {
+    background: none; border: 1px solid var(--line); color: var(--text); border-radius: 8px;
+    font-size: 16px; width: 34px; height: 30px; padding: 0; flex: none;
+  }
+
+  .bar { flex: none; display: flex; align-items: center; gap: 4px; padding: 3px 8px; font-size: 12px; color: var(--sub); }
+  .tf {
+    background: var(--panel); color: var(--sub); border: 1px solid var(--line); border-radius: 6px;
+    font-size: 12px; font-weight: 600; padding: 5px 0; flex: 1 1 0; min-width: 0;
+  }
+  .tf.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .mini {
+    background: var(--panel); color: var(--sub); border: 1px solid var(--line); border-radius: 6px;
+    font-size: 11px; padding: 3px 8px;
+  }
+  .num { font-variant-numeric: tabular-nums; }
+  .ohlc { flex: none; padding: 0 10px 2px; font-size: 11px; color: var(--sub); height: 16px; white-space: nowrap; overflow: hidden; }
+  .ohlc b { color: var(--text); font-weight: 500; }
+
+  #notice { display: none; background: #2a2210; border: 1px solid #5c4813; color: #f0d58a; border-radius: 8px; padding: 10px; font-size: 13px; line-height: 1.6; }
+  #notice.show { display: block; }
+  #toast {
+    position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    max-width: 90vw; background: #3a1d1d; border: 1px solid #6b2a2a; color: #ffd2d2; font-size: 13px;
+    padding: 8px 12px; border-radius: 10px; opacity: 0; pointer-events: none; transition: opacity .3s; z-index: 20;
+  }
+  #toast.show { opacity: 1; }
+  #settings {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: flex-end; z-index: 10;
+  }
+  #settings.open { display: flex; }
+  .sheet {
+    width: 100%; background: var(--panel); border-radius: 14px 14px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+    max-height: 90dvh; overflow-y: auto; -webkit-user-select: text; user-select: text;
+  }
+  .sheet h2 { margin: 0 0 12px; font-size: 17px; }
+  .sheet label { display: block; font-size: 13px; color: var(--sub); margin: 12px 0 4px; }
+  .sheet select, .sheet input {
+    width: 100%; font-size: 16px; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text);
+  }
+  .sheet p { font-size: 12px; color: var(--sub); line-height: 1.6; margin: 6px 0; }
+  .sheet a { color: var(--accent); }
+  .row { display: flex; gap: 8px; margin-top: 16px; }
+  .btn { flex: 1; font-size: 15px; padding: 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- 上半分：ローソク足 -->
+  <section class="pane">
+    <header>
+      <span class="sym">USD/JPY</span>
+      <span class="price num" id="price">---.---</span>
+      <span class="chg num" id="chg"></span>
+      <span class="spacer"></span>
+      <span class="status"><span class="dot" id="dot"></span><span id="statusText">接続中…</span></span>
+      <button class="iconbtn" id="openSettings" aria-label="設定">⚙︎</button>
+    </header>
+    <div class="bar" id="tfbar"></div>
+    <div class="ohlc num" id="ohlc"></div>
+    <div class="chart" id="candleChart"></div>
+  </section>
+
+  <!-- 下半分：ティック -->
+  <section class="pane">
+    <div class="bar">
+      <span style="color:var(--text);font-weight:600">ティック</span>
+      <span class="num" id="bidask"></span>
+      <span class="spacer"></span>
+      <span class="num" id="tickInfo"></span>
+      <button class="mini" id="toLatest">最新へ</button>
+    </div>
+    <div class="chart" id="tickChart"></div>
+  </section>
+</div>
+
+<div id="toast"></div>
+<div id="settings">
+  <div class="sheet">
+    <h2>データ設定</h2>
+    <div id="notice"></div>
+    <label for="src">データソース</label>
+    <select id="src">
+      <option value="finnhub">【推奨】Finnhub＋Twelve Data</option>
+      <option value="twelve">Twelve Data のみ</option>
+      <option value="demo">デモ（擬似データ・キー不要）</option>
+    </select>
+    <label for="tdKey">Twelve Data APIキー</label>
+    <input id="tdKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="未設定">
+    <label for="fhKey">Finnhub APIキー</label>
+    <input id="fhKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="未設定">
+    <p>・Twelve Data（<a href="https://twelvedata.com" target="_blank" rel="noopener">twelvedata.com</a>）の無料キーで、M1〜D1の過去足を読み込みます。無料プランは1分あたり8回までなので、時間足ごとに1回だけ読み込み、あとはティックから足を更新します。</p>
+    <p>・Finnhub（<a href="https://finnhub.io" target="_blank" rel="noopener">finnhub.io</a>）の無料キーでは、OANDAのUSD/JPYレートをリアルタイムで受信します。Twelve Dataのキーがない場合は、アプリを開いてからのティックだけで足を作ります。</p>
+    <p>・キーはこの端末のブラウザ内（localStorage）にだけ保存され、各データ提供元以外には送信されません。</p>
+    <p>・時刻はすべて日本時間で表示します。デモモードの価格は実際のレートではありません。</p>
+    <p>チャート：<a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView Lightweight Charts™</a>（Apache License 2.0）</p>
+    <div class="row">
+      <button class="btn" id="cancelSettings">閉じる</button>
+      <button class="btn primary" id="saveSettings">保存して再接続</button>
+    </div>
+  </div>
+</div>
+
+<script src="./vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
+<script>
+(() => {
+  'use strict';
+  const LWC = window.LightweightCharts;
+  const JST = 9 * 3600;               // 表示用に UTC→JST へずらす秒数
+  const MAX_TICKS = 3000;             // ティックチャートに保持する件数
+  const TFS = [
+    { k: 'M1',  s: 60,    td: '1min'  },
+    { k: 'M5',  s: 300,   td: '5min'  },
+    { k: 'M15', s: 900,   td: '15min' },
+    { k: 'M30', s: 1800,  td: '30min' },
+    { k: 'H1',  s: 3600,  td: '1h'    },
+    { k: 'H4',  s: 14400, td: '4h'    },
+    { k: 'D1',  s: 86400, td: '1day'  },
+  ];
+  const TF = Object.fromEntries(TFS.map(t => [t.k, t]));
+
+  // ---------- 設定 ----------
+  const store = {
+    get: (k, d) => { try { return localStorage.getItem('usdjpy.' + k) ?? d; } catch { return d; } },
+    set: (k, v) => { try { localStorage.setItem('usdjpy.' + k, v); } catch {} },
+  };
+  const cfg = {
+    src: store.get('src', 'finnhub'),
+    tdKey: store.get('tdKey', ''),
+    fhKey: store.get('fhKey', ''),
+    tf: store.get('tf', 'M1'),
+  };
+  if (!TF[cfg.tf]) cfg.tf = 'M1';
+
+  // ---------- 小物 ----------
+  const $ = id => document.getElementById(id);
+  const r3 = v => Math.round(v * 1000) / 1000;
+  const f3 = v => v.toFixed(3);
+  const pad = n => String(n).padStart(2, '0');
+  const jst = sec => new Date((sec + JST) * 1000);
+  const fmtHMS = sec => { const d = jst(sec); return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`; };
+  const fmtDT = sec => { const d = jst(sec); return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; };
+  const bucket = (t, s) => Math.floor(t / s) * s;
+  const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+
+  let toastTimer;
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 6000);
+  }
+
+  // FX 市場の休場判定（NY時間 金曜17:00〜日曜17:00）
+  const nyFmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', hourCycle: 'h23' });
+  function marketClosed() {
+    const parts = Object.fromEntries(nyFmt.formatToParts(new Date()).map(x => [x.type, x.value]));
+    const h = +parts.hour, d = parts.weekday;
+    return (d === 'Fri' && h >= 17) || d === 'Sat' || (d === 'Sun' && h < 17);
+  }
+
+  function setStatus(text, kind) {
+    $('statusText').textContent = text;
+    $('dot').className = 'dot ' + (kind || '');
+  }
+
+  // ---------- チャート共通 ----------
+  const baseOpts = {
+    autoSize: true,
+    layout: { background: { type: 'solid', color: '#0b0e14' }, textColor: '#8a94a6', fontSize: 11 },
+    grid: { vertLines: { color: '#161b26' }, horzLines: { color: '#161b26' } },
+    rightPriceScale: { borderColor: '#232a38', scaleMargins: { top: 0.1, bottom: 0.08 } },
+    crosshair: { mode: LWC.CrosshairMode.Normal },
+    localization: { locale: 'ja-JP', priceFormatter: p => f3(p) },
+    handleScale: { axisPressedMouseMove: true, pinch: true, mouseWheel: true },
+  };
+  const priceFormat = { type: 'price', precision: 3, minMove: 0.001 };
+
+  // 上：ローソク足
+  const cChart = LWC.createChart($('candleChart'), {
+    ...baseOpts,
+    timeScale: { borderColor: '#232a38', timeVisible: true, secondsVisible: false, rightOffset: 4, barSpacing: 7 },
+  });
+  const candles = cChart.addSeries(LWC.CandlestickSeries, {
+    upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
+    wickUpColor: '#26a69a', wickDownColor: '#ef5350', priceFormat,
+  });
+
+  // 下：ティック（時刻が重複するので連番をx軸にし、表示だけ実時刻に変換）
+  let tickSeq = 0;
+  const ticks = [];   // {i, t(UTC秒・小数可), p}
+  const tickTimeOf = i => { const k = i - (ticks.length ? ticks[0].i : 0); return ticks[k] ? ticks[k].t : null; };
+  const tChart = LWC.createChart($('tickChart'), {
+    ...baseOpts,
+    layout: { ...baseOpts.layout, attributionLogo: false },
+    localization: { ...baseOpts.localization, timeFormatter: i => { const t = tickTimeOf(i); return t == null ? '' : fmtHMS(t); } },
+    timeScale: {
+      borderColor: '#232a38', rightOffset: 8, barSpacing: 4, minBarSpacing: 0.3,
+      tickMarkFormatter: i => { const t = tickTimeOf(i); return t == null ? '' : fmtHMS(t); },
+    },
+  });
+  const tickLine = tChart.addSeries(LWC.LineSeries, {
+    color: '#4da3ff', lineWidth: 2, priceFormat,
+    lastPriceAnimation: LWC.LastPriceAnimationMode.OnDataUpdate,
+    crosshairMarkerRadius: 3,
+  });
+
+  // ---------- 足データ ----------
+  const bars = {};      // tf -> [{time(UTC), open, high, low, close}]
+  const loaded = {};    // tf -> 過去足の読み込み済みか
+  let lastPrice = null, sessionOpen = null;
+  const toDisp = b => ({ time: b.time + JST, open: b.open, high: b.high, low: b.low, close: b.close });
+
+  function resetData() {
+    TFS.forEach(t => { bars[t.k] = []; loaded[t.k] = false; });
+    ticks.length = 0; tickSeq = 0; lastPrice = null; sessionOpen = null;
+    candles.setData([]); tickLine.setData([]);
+    $('price').textContent = '---.---'; $('chg').textContent = ''; $('bidask').textContent = '';
+  }
+
+  function renderCandles() {
+    const arr = bars[cfg.tf];
+    candles.setData(arr.map(toDisp));
+    cChart.applyOptions({ timeScale: { timeVisible: TF[cfg.tf].s < 86400 } });
+    cChart.timeScale().scrollToRealTime();
+    showOHLC(arr[arr.length - 1]);
+  }
+
+  function showOHLC(b) {
+    if (!b) { $('ohlc').textContent = ''; return; }
+    const cls = b.close >= b.open ? 'up' : 'down';
+    $('ohlc').innerHTML = `${fmtDT(b.time)}　O <b>${f3(b.open)}</b> H <b>${f3(b.high)}</b> L <b>${f3(b.low)}</b> C <b class="${cls}">${f3(b.close)}</b>`;
+  }
+
+  // 1ティックを全時間足とティックチャートへ反映
+  const tickRate = [];
+  let lastTickAt = 0;
+  function applyTick(p, tSec, bid, ask) {
+    p = r3(p);
+    if (!isFinite(p) || p <= 0) return;
+    lastTickAt = Date.now();
+    for (const t of TFS) {
+      const arr = bars[t.k];
+      const b = bucket(tSec, t.s);
+      const last = arr[arr.length - 1];
+      let bar;
+      if (last && last.time === b) {
+        last.high = Math.max(last.high, p); last.low = Math.min(last.low, p); last.close = p; bar = last;
+      } else if (!last || b > last.time) {
+        bar = { time: b, open: p, high: p, low: p, close: p }; arr.push(bar);
+      } else continue;  // 古いティックは無視
+      if (t.k === cfg.tf) { candles.update(toDisp(bar)); if (!crosshairActive) showOHLC(bar); }
+    }
+
+    const i = ++tickSeq;
+    ticks.push({ i, t: tSec, p });
+    if (ticks.length > MAX_TICKS + 500) {
+      ticks.splice(0, ticks.length - MAX_TICKS);
+      tickLine.setData(ticks.map(x => ({ time: x.i, value: x.p })));
+    } else {
+      tickLine.update({ time: i, value: p });
+    }
+
+    // ヘッダー
+    const prev = lastPrice;
+    lastPrice = p;
+    if (sessionOpen == null) sessionOpen = p;
+    const el = $('price');
+    el.textContent = f3(p);
+    if (prev != null && p !== prev) el.className = 'price num ' + (p > prev ? 'up' : 'down');
+    const d1 = bars.D1[bars.D1.length - 1];
+    const base = loaded.D1 && d1 ? d1.open : sessionOpen;
+    const diff = p - base;
+    $('chg').textContent = `${diff >= 0 ? '+' : ''}${diff.toFixed(3)} (${diff >= 0 ? '+' : ''}${(diff / base * 100).toFixed(2)}%)`;
+    $('chg').className = 'chg num ' + (diff >= 0 ? 'up' : 'down');
+    $('bidask').textContent = (bid && ask) ? `B ${f3(bid)} / A ${f3(ask)}` : '';
+
+    const now = Date.now();
+    tickRate.push(now);
+    while (tickRate.length && now - tickRate[0] > 60000) tickRate.shift();
+    $('tickInfo').textContent = `${tickRate.length}回/分`;
+  }
+
+  // ---------- 過去足 ----------
+  // デモ：現在値で終わる擬似的な過去足を作る
+  function genHistory(t, endPrice, n = 600) {
+    const vol = 0.011 * Math.sqrt(t.s / 60);
+    const now = bucket(Date.now() / 1000, t.s);
+    let c = endPrice;
+    const out = [];
+    for (let k = 0; k < n; k++) {
+      const o = r3(c - gauss() * vol);
+      const h = r3(Math.max(o, c) + Math.abs(gauss()) * vol * 0.6);
+      const l = r3(Math.min(o, c) - Math.abs(gauss()) * vol * 0.6);
+      out.push({ time: now - k * t.s, open: o, high: h, low: l, close: c });
+      c = o;
+    }
+    return out.reverse();
+  }
+
+  // Twelve Data：REST で過去足を取得
+  const parseUTC = s => Date.parse(s.length > 10 ? s.replace(' ', 'T') + 'Z' : s + 'T00:00:00Z') / 1000;
+  async function fetchTwelve(t) {
+    const url = `https://api.twelvedata.com/time_series?symbol=USD/JPY&interval=${t.td}&outputsize=1000&timezone=UTC&apikey=${encodeURIComponent(cfg.tdKey)}`;
+    const res = await fetch(url);
+    const j = await res.json();
+    if (j.status === 'error' || !Array.isArray(j.values)) throw new Error(j.message || '過去足の取得に失敗');
+    return j.values.map(v => ({ time: parseUTC(v.datetime), open: +v.open, high: +v.high, low: +v.low, close: +v.close }))
+      .filter(b => isFinite(b.time)).sort((a, b) => a.time - b.time);
+  }
+
+  // 取得した過去足と、受信済みティックから作った足を結合
+  function mergeHistory(tfk, hist) {
+    if (!hist.length) return;
+    const live = bars[tfk];
+    const lastT = hist[hist.length - 1].time;
+    for (const b of live) {
+      if (b.time === lastT) {
+        const h = hist[hist.length - 1];
+        h.high = Math.max(h.high, b.high); h.low = Math.min(h.low, b.low); h.close = b.close;
+      } else if (b.time > lastT) hist.push(b);
+    }
+    bars[tfk] = hist;
+  }
+
+  const inflight = {};
+  async function ensureHistory(tfk, force) {
+    if ((loaded[tfk] && !force) || inflight[tfk]) return;
+    if (cfg.src === 'demo') {
+      bars[tfk] = genHistory(TF[tfk], lastPrice ?? demo.price);
+      loaded[tfk] = true;
+      return;
+    }
+    if (!cfg.tdKey) return;  // キーなし：ティックから作った足のみ
+    inflight[tfk] = true;
+    const g = gen;
+    try {
+      const hist = await fetchTwelve(TF[tfk]);
+      if (g !== gen) return;
+      mergeHistory(tfk, hist);
+      loaded[tfk] = true;
+      if (tfk === cfg.tf) renderCandles();
+    } catch (e) {
+      if (g === gen) toast('過去足（' + tfk + '）を取得できません：' + e.message);
+    } finally { inflight[tfk] = false; }
+  }
+
+  // ---------- ティック配信 ----------
+  let gen = 0;          // 接続の世代（設定変更で古い接続を無効化）
+  let ws = null, timer = null, heartbeat = null, retry = null;
+
+  const demo = { price: 155.0, anchor: 155.0 };
+  function startDemo() {
+    setStatus('デモ', 'warn');
+    const loop = () => {
+      const g = gen;
+      // 平均回帰つきランダムウォーク
+      demo.price += gauss() * 0.0035 + (demo.anchor - demo.price) * 0.0005 + (Math.random() < 0.02 ? gauss() * 0.02 : 0);
+      const p = r3(demo.price);
+      applyTick(p, Date.now() / 1000, r3(p - 0.002), r3(p + 0.002));
+      if (g === gen) timer = setTimeout(loop, 120 + Math.random() * 800);
+    };
+    loop();
+  }
+
+  let failCount = 0;     // 連続で接続に失敗した回数
+  let hadGap = false;    // 切断があった（復帰時に過去足を取り直す）
+  function openSocket(url, onOpen, onMsg, label) {
+    const g = gen;
+    setStatus(label + ' 接続中…', 'warn');
+    let opened = false;
+    const s = new WebSocket(url);
+    ws = s;
+    s.onopen = () => {
+      if (g !== gen) return;
+      opened = true; failCount = 0;
+      lastTickAt = Date.now();
+      onOpen(s);
+      if (hadGap && cfg.tdKey) { hadGap = false; ensureHistory(cfg.tf, true); }
+    };
+    s.onmessage = ev => { if (g !== gen) return; try { onMsg(JSON.parse(ev.data)); } catch {} };
+    s.onclose = () => {
+      if (g !== gen) return;
+      clearInterval(heartbeat);
+      hadGap = true;
+      if (!opened) failCount++;
+      // 失敗が続くほど間隔をあける（3秒→最大60秒）
+      const wait = Math.min(60000, 3000 * 2 ** Math.min(failCount, 5));
+      if (failCount >= 3) setStatus(label + ' 接続失敗（キーを確認）', 'err');
+      else setStatus(label + ' 再接続中…', 'err');
+      if (document.visibilityState === 'visible') retry = setTimeout(() => { if (g === gen) connectTicks(); }, wait);
+    };
+  }
+
+  function startTwelve() {
+    if (!cfg.tdKey) { setStatus('Twelve Data のキーを設定してください', 'err'); return; }
+    openSocket(`wss://ws.twelvedata.com/v1/quotes/price?apikey=${encodeURIComponent(cfg.tdKey)}`,
+      s => {
+        s.send(JSON.stringify({ action: 'subscribe', params: { symbols: 'USD/JPY' } }));
+        heartbeat = setInterval(() => { if (s.readyState === 1) s.send(JSON.stringify({ action: 'heartbeat' })); }, 10000);
+      },
+      d => {
+        if (d.event === 'price') {
+          setStatus('Twelve Data', 'ok');
+          applyTick(+d.price, d.timestamp ? +d.timestamp : Date.now() / 1000, +d.bid || 0, +d.ask || 0);
+        } else if (d.event === 'subscribe-status') {
+          if (d.status === 'ok' && (!d.fails || !d.fails.length)) setStatus('Twelve Data 受信待ち', 'ok');
+          else setStatus('Twelve Data: 購読失敗（プランを確認）', 'err');
+        }
+      }, 'Twelve Data');
+  }
+
+  function startFinnhub() {
+    if (!cfg.fhKey) { setStatus('Finnhub のキーを設定してください', 'err'); return; }
+    openSocket(`wss://ws.finnhub.io?token=${encodeURIComponent(cfg.fhKey)}`,
+      s => { s.send(JSON.stringify({ type: 'subscribe', symbol: 'OANDA:USD_JPY' })); setStatus('Finnhub 受信待ち', 'ok'); },
+      d => {
+        if (d.type === 'trade' && Array.isArray(d.data)) {
+          setStatus('Finnhub', 'ok');
+          d.data.sort((a, b) => a.t - b.t).forEach(x => applyTick(+x.p, x.t / 1000));
+        } else if (d.type === 'error') setStatus('Finnhub: ' + (d.msg || 'エラー'), 'err');
+      }, 'Finnhub');
+  }
+
+  function stopTicks() {
+    clearTimeout(timer); clearInterval(heartbeat); clearTimeout(retry);
+    if (ws) { ws.onclose = null; ws.onmessage = null; try { ws.close(); } catch {} ws = null; }
+  }
+
+  function connectTicks() {
+    stopTicks();
+    if (cfg.src === 'demo') startDemo();
+    else if (cfg.src === 'twelve') startTwelve();
+    else startFinnhub();
+  }
+
+  function start() {
+    gen++;
+    stopTicks();
+    resetData();
+    if (cfg.src === 'demo') TFS.forEach(t => ensureHistory(t.k));
+    else { ensureHistory('D1'); ensureHistory(cfg.tf); }
+    renderCandles();
+    connectTicks();
+  }
+
+  // ---------- 時間足ボタン＋残り時間 ----------
+  const tfbar = $('tfbar');
+  TFS.forEach(t => {
+    const b = document.createElement('button');
+    b.className = 'tf' + (t.k === cfg.tf ? ' active' : '');
+    b.textContent = t.k; b.dataset.tf = t.k;
+    b.onclick = () => selectTF(t.k);
+    tfbar.appendChild(b);
+  });
+  const cd = document.createElement('span');
+  cd.className = 'num'; cd.style.cssText = 'flex:none;width:46px;text-align:right;font-size:11px';
+  tfbar.appendChild(cd);
+  setInterval(() => {
+    const s = TF[cfg.tf].s, now = Date.now() / 1000;
+    const left = Math.max(0, Math.ceil(bucket(now, s) + s - now));
+    const h = Math.floor(left / 3600), m = Math.floor(left % 3600 / 60), sec = left % 60;
+    cd.textContent = h ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
+  }, 1000);
+
+  function selectTF(k) {
+    cfg.tf = k; store.set('tf', k);
+    [...tfbar.querySelectorAll('.tf')].forEach(b => b.classList.toggle('active', b.dataset.tf === k));
+    renderCandles();
+    ensureHistory(k);
+  }
+
+  // クロスヘア位置の OHLC を表示
+  let crosshairActive = false;
+  cChart.subscribeCrosshairMove(param => {
+    const d = param.time != null ? param.seriesData.get(candles) : null;
+    crosshairActive = !!d;
+    const arr = bars[cfg.tf];
+    showOHLC(d ? { ...d, time: d.time - JST } : arr[arr.length - 1]);
+  });
+
+  $('toLatest').onclick = () => { tChart.timeScale().scrollToRealTime(); cChart.timeScale().scrollToRealTime(); };
+
+  // ---------- 設定画面 ----------
+  const sheet = $('settings');
+  $('openSettings').onclick = () => {
+    $('src').value = cfg.src; $('tdKey').value = cfg.tdKey; $('fhKey').value = cfg.fhKey;
+    sheet.classList.add('open');
+  };
+  $('cancelSettings').onclick = () => sheet.classList.remove('open');
+  sheet.onclick = e => { if (e.target === sheet) sheet.classList.remove('open'); };
+  $('saveSettings').onclick = () => {
+    cfg.src = $('src').value; cfg.tdKey = $('tdKey').value.trim(); cfg.fhKey = $('fhKey').value.trim();
+    store.set('src', cfg.src); store.set('tdKey', cfg.tdKey); store.set('fhKey', cfg.fhKey);
+    sheet.classList.remove('open');
+    $('notice').classList.remove('show');
+    failCount = 0; hadGap = false;
+    start();
+  };
+
+  // iPhone はバックグラウンドで通信が切れるので、復帰時に再接続＆過去足を補完
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible' || cfg.src === 'demo') return;
+    // 切断済み、または30秒以上受信がない（裏で止まっていた）なら張り直す
+    if (!ws || ws.readyState > 1 || (Date.now() - lastTickAt > 30000 && !marketClosed())) {
+      hadGap = true; failCount = 0; connectTicks();
+    } else if (cfg.tdKey) ensureHistory(cfg.tf, true);
+  });
+
+  // 受信が止まっていないか監視
+  setInterval(() => {
+    if (cfg.src === 'demo' || !ws || ws.readyState !== 1) return;
+    if (Date.now() - lastTickAt > 60000) {
+      setStatus(marketClosed() ? '休場中（週末）' : '受信待ち（値動きなし）', 'warn');
+    }
+  }, 5000);
+
+  start();
+
+  // 初回：キーが未設定なら設定画面を開く
+  const need = cfg.src === 'finnhub' ? !cfg.fhKey : cfg.src === 'twelve' ? !cfg.tdKey : false;
+  if (need) {
+    $('notice').innerHTML = 'リアルタイム表示にはAPIキー（無料）が必要です。<br>Finnhub と Twelve Data で無料登録してキーを入力し、「保存して再接続」を押してください。<br>キーなしで試す場合は、データソースを「デモ」にしてください。';
+    $('notice').classList.add('show');
+    $('openSettings').click();
+  }
+})();
+</script>
+</body>
+</html>
