@@ -295,22 +295,22 @@
   }
 
   // ---------- インジケーター ----------
-  // ※初期値は暫定。設定画面から変更でき、端末に保存される
+  // 初期値は北原式（WMA21・28・35 ／ BB±2σ）。設定画面から変更でき、端末に保存される
   const IND_DEFAULT = {
     bb: [
       { on: true, name: 'BB20', p: 20, sd: '2', color: '#5b9cf6' },
       { on: true, name: 'BB40', p: 40, sd: '2', color: '#c084fc' },
     ],
     ma: [
-      { on: true, name: '短期', p: 20,  type: 'SMA', color: '#f5c542' },
-      { on: true, name: '中期', p: 75,  type: 'SMA', color: '#ff8a3d' },
-      { on: true, name: '長期', p: 200, type: 'SMA', color: '#e5e7eb' },
+      { on: true, name: '短期', p: 21, type: 'WMA', color: '#f5c542' },
+      { on: true, name: '中期', p: 28, type: 'WMA', color: '#ff8a3d' },
+      { on: true, name: '長期', p: 35, type: 'WMA', color: '#e5e7eb' },
     ],
   };
   const clone = o => JSON.parse(JSON.stringify(o));
   let ind = clone(IND_DEFAULT);
   try {
-    const saved = JSON.parse(store.get('ind', 'null'));
+    const saved = JSON.parse(store.get('ind2', 'null'));
     if (saved && saved.bb && saved.ma) {
       ind.bb = IND_DEFAULT.bb.map((d, i) => ({ ...d, ...(saved.bb[i] || {}), color: d.color, name: d.name }));
       ind.ma = IND_DEFAULT.ma.map((d, i) => ({ ...d, ...(saved.ma[i] || {}), color: d.color, name: d.name }));
@@ -343,7 +343,14 @@
 
   function calcMA(arr, p, type) {
     const out = new Array(arr.length).fill(null);
-    if (type === 'EMA') {
+    if (type === 'WMA') {   // 加重移動平均（新しい足ほど重く：1,2,…,p）
+      const den = p * (p + 1) / 2;
+      for (let i = p - 1; i < arr.length; i++) {
+        let num = 0;
+        for (let k = 0; k < p; k++) num += arr[i - p + 1 + k].close * (k + 1);
+        out[i] = num / den;
+      }
+    } else if (type === 'EMA') {
       const a = 2 / (p + 1); let e = null, sum = 0;
       for (let i = 0; i < arr.length; i++) {
         const c = arr[i].close;
@@ -674,7 +681,7 @@
       <input type="number" inputmode="numeric" min="2" max="500" id="${kind}p${i}" value="${x.p}">
       ${kind === 'bb'
         ? `<input type="text" inputmode="decimal" id="bbsd${i}" value="${x.sd}">`
-        : `<select id="mat${i}"><option${x.type === 'SMA' ? ' selected' : ''}>SMA</option><option${x.type === 'EMA' ? ' selected' : ''}>EMA</option></select>`}
+        : `<select id="mat${i}">${['WMA', 'SMA', 'EMA'].map(t => `<option${x.type === t ? ' selected' : ''}>${t}</option>`).join('')}</select>`}
     </div>`;
     $('indRows').innerHTML = src.bb.map((x, i) => row('bb', i, x)).join('') + src.ma.map((x, i) => row('ma', i, x)).join('');
   }
@@ -696,7 +703,7 @@
   sheet.onclick = e => { if (e.target === sheet) sheet.classList.remove('open'); };
   $('saveSettings').onclick = () => {
     ind = readIndRows();
-    store.set('ind', JSON.stringify(ind));
+    store.set('ind2', JSON.stringify(ind));
     buildIndicators();
     renderIndicators(true);
 
