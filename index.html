@@ -59,6 +59,18 @@
   .num { font-variant-numeric: tabular-nums; }
   .ohlc { flex: none; padding: 0 10px 2px; font-size: 11px; color: var(--sub); height: 16px; white-space: nowrap; overflow: hidden; }
   .ohlc b { color: var(--text); font-weight: 500; }
+  #legend {
+    position: absolute; left: 6px; top: 4px; z-index: 3; pointer-events: none;
+    font-size: 10px; line-height: 1.45; display: flex; flex-wrap: wrap; gap: 0 8px; max-width: 78%;
+    text-shadow: 0 0 3px #0b0e14, 0 0 3px #0b0e14;
+  }
+  .sheet h3 { margin: 22px 0 4px; font-size: 15px; }
+  .ind { display: grid; grid-template-columns: 26px 1fr 64px 76px; gap: 6px; align-items: center; margin-top: 8px; font-size: 13px; }
+  .ind input[type=checkbox] { width: 20px; height: 20px; margin: 0; }
+  .ind input, .ind select { padding: 7px 6px; font-size: 16px; }
+  .ind .nm { display: flex; align-items: center; gap: 6px; }
+  .sw { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+  .indhead { display: grid; grid-template-columns: 26px 1fr 64px 76px; gap: 6px; font-size: 11px; color: var(--sub); margin-top: 6px; }
 
   #notice { display: none; background: #2a2210; border: 1px solid #5c4813; color: #f0d58a; border-radius: 8px; padding: 10px; font-size: 13px; line-height: 1.6; }
   #notice.show { display: block; }
@@ -103,7 +115,7 @@
     </header>
     <div class="bar" id="tfbar"></div>
     <div class="ohlc num" id="ohlc"></div>
-    <div class="chart" id="candleChart"></div>
+    <div class="chart" id="candleChart"><div id="legend" class="num"></div></div>
   </section>
 
   <!-- 下半分：ティック -->
@@ -138,10 +150,15 @@
     <p>・Finnhub（<a href="https://finnhub.io" target="_blank" rel="noopener">finnhub.io</a>）の無料キーでは、OANDAのUSD/JPYレートをリアルタイムで受信します。Twelve Dataのキーがない場合は、アプリを開いてからのティックだけで足を作ります。</p>
     <p>・キーはこの端末のブラウザ内（localStorage）にだけ保存され、各データ提供元以外には送信されません。</p>
     <p>・時刻はすべて日本時間で表示します。デモモードの価格は実際のレートではありません。</p>
+    <h3>インジケーター（上のローソク足に表示）</h3>
+    <div class="indhead"><span></span><span>名前</span><span>期間</span><span id="indHead4">σ / 種類</span></div>
+    <div id="indRows"></div>
+    <p>・ボリンジャーバンドの σ は「2」または「1,2,3」のようにカンマ区切りで複数指定できます。</p>
+    <p><button class="mini" id="indReset" type="button">インジケーターを初期値に戻す</button></p>
     <p>チャート：<a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView Lightweight Charts™</a>（Apache License 2.0）</p>
     <div class="row">
       <button class="btn" id="cancelSettings">閉じる</button>
-      <button class="btn primary" id="saveSettings">保存して再接続</button>
+      <button class="btn primary" id="saveSettings">保存</button>
     </div>
   </div>
 </div>
@@ -258,12 +275,14 @@
     TFS.forEach(t => { bars[t.k] = []; loaded[t.k] = false; });
     ticks.length = 0; tickSeq = 0; lastPrice = null; sessionOpen = null;
     candles.setData([]); tickLine.setData([]);
+    lines.forEach(l => l.series.setData([]));
     $('price').textContent = '---.---'; $('chg').textContent = ''; $('bidask').textContent = '';
   }
 
   function renderCandles() {
     const arr = bars[cfg.tf];
     candles.setData(arr.map(toDisp));
+    renderIndicators(true);
     cChart.applyOptions({ timeScale: { timeVisible: TF[cfg.tf].s < 86400 } });
     cChart.timeScale().scrollToRealTime();
     showOHLC(arr[arr.length - 1]);
@@ -273,6 +292,121 @@
     if (!b) { $('ohlc').textContent = ''; return; }
     const cls = b.close >= b.open ? 'up' : 'down';
     $('ohlc').innerHTML = `${fmtDT(b.time)}　O <b>${f3(b.open)}</b> H <b>${f3(b.high)}</b> L <b>${f3(b.low)}</b> C <b class="${cls}">${f3(b.close)}</b>`;
+  }
+
+  // ---------- インジケーター ----------
+  // ※初期値は暫定。設定画面から変更でき、端末に保存される
+  const IND_DEFAULT = {
+    bb: [
+      { on: true, name: 'BB20', p: 20, sd: '2', color: '#5b9cf6' },
+      { on: true, name: 'BB40', p: 40, sd: '2', color: '#c084fc' },
+    ],
+    ma: [
+      { on: true, name: '短期', p: 20,  type: 'SMA', color: '#f5c542' },
+      { on: true, name: '中期', p: 75,  type: 'SMA', color: '#ff8a3d' },
+      { on: true, name: '長期', p: 200, type: 'SMA', color: '#e5e7eb' },
+    ],
+  };
+  const clone = o => JSON.parse(JSON.stringify(o));
+  let ind = clone(IND_DEFAULT);
+  try {
+    const saved = JSON.parse(store.get('ind', 'null'));
+    if (saved && saved.bb && saved.ma) {
+      ind.bb = IND_DEFAULT.bb.map((d, i) => ({ ...d, ...(saved.bb[i] || {}), color: d.color, name: d.name }));
+      ind.ma = IND_DEFAULT.ma.map((d, i) => ({ ...d, ...(saved.ma[i] || {}), color: d.color, name: d.name }));
+    }
+  } catch {}
+  const sdList = str => [...new Set(String(str).split(/[,、\s]+/).map(Number).filter(v => v > 0 && v <= 5))].sort((a, b) => a - b);
+
+  let lines = [];   // { series, label, color, values: [] }
+  const lineOpts = (color, extra) => ({
+    color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
+    crosshairMarkerVisible: false, priceFormat, ...extra,
+  });
+
+  function buildIndicators() {
+    lines.forEach(l => cChart.removeSeries(l.series));
+    lines = [];
+    ind.ma.filter(m => m.on).forEach(m => {
+      lines.push({ kind: 'ma', cfg: m, label: `${m.type}${m.p}`, color: m.color,
+        series: cChart.addSeries(LWC.LineSeries, lineOpts(m.color, { lineWidth: 2 })) });
+    });
+    ind.bb.filter(b => b.on).forEach(b => {
+      lines.push({ kind: 'mid', cfg: b, label: `BB${b.p}`, color: b.color,
+        series: cChart.addSeries(LWC.LineSeries, lineOpts(b.color, { lineStyle: LWC.LineStyle.Dashed })) });
+      sdList(b.sd).forEach(k => {
+        [1, -1].forEach(sign => lines.push({ kind: 'band', cfg: b, k: k * sign, label: `${sign > 0 ? '+' : '−'}${k}σ`, color: b.color,
+          series: cChart.addSeries(LWC.LineSeries, lineOpts(b.color + (k >= 2 ? '' : 'aa'))) }));
+      });
+    });
+  }
+
+  function calcMA(arr, p, type) {
+    const out = new Array(arr.length).fill(null);
+    if (type === 'EMA') {
+      const a = 2 / (p + 1); let e = null, sum = 0;
+      for (let i = 0; i < arr.length; i++) {
+        const c = arr[i].close;
+        if (i < p) { sum += c; if (i === p - 1) { e = sum / p; out[i] = e; } }
+        else { e = a * c + (1 - a) * e; out[i] = e; }
+      }
+    } else {
+      let sum = 0;
+      for (let i = 0; i < arr.length; i++) {
+        sum += arr[i].close;
+        if (i >= p) sum -= arr[i - p].close;
+        if (i >= p - 1) out[i] = sum / p;
+      }
+    }
+    return out;
+  }
+  function calcBB(arr, p) {   // 中心線(SMA)と標準偏差（母標準偏差）
+    const mid = new Array(arr.length).fill(null), sd = new Array(arr.length).fill(null);
+    let sum = 0, sq = 0;
+    for (let i = 0; i < arr.length; i++) {
+      const c = arr[i].close; sum += c; sq += c * c;
+      if (i >= p) { const o = arr[i - p].close; sum -= o; sq -= o * o; }
+      if (i >= p - 1) { const m = sum / p; mid[i] = m; sd[i] = Math.sqrt(Math.max(0, sq / p - m * m)); }
+    }
+    return { mid, sd };
+  }
+
+  // full=true: 全データを描き直す / false: 最新の足だけ更新
+  function renderIndicators(full) {
+    const arr = bars[cfg.tf];
+    const ma = {}, bb = {};
+    for (const l of lines) {
+      let v;
+      if (l.kind === 'ma') v = ma[l.label] ??= calcMA(arr, l.cfg.p, l.cfg.type);
+      else {
+        const r = bb[l.cfg.p] ??= calcBB(arr, l.cfg.p);
+        v = l.kind === 'mid' ? r.mid : r.mid.map((m, i) => m == null ? null : m + l.k * r.sd[i]);
+      }
+      l.values = v;
+      if (full) {
+        l.series.setData(arr.map((b, i) => v[i] == null ? null : { time: b.time + JST, value: v[i] }).filter(Boolean));
+      } else if (arr.length && v[arr.length - 1] != null) {
+        l.series.update({ time: arr[arr.length - 1].time + JST, value: v[arr.length - 1] });
+      }
+    }
+    if (!crosshairActive) showLegend(arr.length - 1);
+  }
+
+  function showLegend(idx) {
+    const parts = [];
+    for (const l of lines) {
+      if (l.kind === 'band') continue;
+      const v = l.values && l.values[idx];
+      const extra = l.kind === 'mid' ? `(${sdList(l.cfg.sd).map(k => k + 'σ').join(',')})` : '';
+      parts.push(`<span style="color:${l.color}">${l.kind === 'ma' ? l.cfg.name + ' ' : ''}${l.label}${extra} ${v == null ? '-' : f3(v)}</span>`);
+    }
+    $('legend').innerHTML = parts.join('');
+  }
+
+  let indTimer = null;
+  function scheduleIndicators() {
+    if (indTimer) return;
+    indTimer = setTimeout(() => { indTimer = null; renderIndicators(false); }, 250);
   }
 
   // 1ティックを全時間足とティックチャートへ反映
@@ -292,7 +426,7 @@
       } else if (!last || b > last.time) {
         bar = { time: b, open: p, high: p, low: p, close: p }; arr.push(bar);
       } else continue;  // 古いティックは無視
-      if (t.k === cfg.tf) { candles.update(toDisp(bar)); if (!crosshairActive) showOHLC(bar); }
+      if (t.k === cfg.tf) { candles.update(toDisp(bar)); if (!crosshairActive) showOHLC(bar); scheduleIndicators(); }
     }
 
     const i = ++tickSeq;
@@ -520,25 +654,59 @@
     crosshairActive = !!d;
     const arr = bars[cfg.tf];
     showOHLC(d ? { ...d, time: d.time - JST } : arr[arr.length - 1]);
+    let idx = arr.length - 1;
+    if (d) {   // 二分探索で足の位置を求める
+      const t = d.time - JST; let lo = 0, hi = arr.length - 1;
+      while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m].time < t) lo = m + 1; else hi = m; }
+      idx = lo;
+    }
+    showLegend(idx);
   });
 
   $('toLatest').onclick = () => { tChart.timeScale().scrollToRealTime(); cChart.timeScale().scrollToRealTime(); };
 
   // ---------- 設定画面 ----------
   const sheet = $('settings');
+  function fillIndRows(src) {
+    const row = (kind, i, x) => `<div class="ind">
+      <input type="checkbox" id="${kind}on${i}" ${x.on ? 'checked' : ''}>
+      <span class="nm"><span class="sw" style="background:${x.color}"></span>${kind === 'bb' ? 'ボリンジャー' + (i + 1) : '移動平均 ' + x.name}</span>
+      <input type="number" inputmode="numeric" min="2" max="500" id="${kind}p${i}" value="${x.p}">
+      ${kind === 'bb'
+        ? `<input type="text" inputmode="decimal" id="bbsd${i}" value="${x.sd}">`
+        : `<select id="mat${i}"><option${x.type === 'SMA' ? ' selected' : ''}>SMA</option><option${x.type === 'EMA' ? ' selected' : ''}>EMA</option></select>`}
+    </div>`;
+    $('indRows').innerHTML = src.bb.map((x, i) => row('bb', i, x)).join('') + src.ma.map((x, i) => row('ma', i, x)).join('');
+  }
+  function readIndRows() {
+    const n = (id, d) => { const v = Math.round(+$(id).value); return v >= 2 && v <= 500 ? v : d; };
+    return {
+      bb: ind.bb.map((x, i) => ({ ...x, on: $('bbon' + i).checked, p: n('bbp' + i, x.p), sd: sdList($('bbsd' + i).value).join(',') || x.sd })),
+      ma: ind.ma.map((x, i) => ({ ...x, on: $('maon' + i).checked, p: n('map' + i, x.p), type: $('mat' + i).value })),
+    };
+  }
+  $('indReset').onclick = () => fillIndRows(IND_DEFAULT);
+
   $('openSettings').onclick = () => {
     $('src').value = cfg.src; $('tdKey').value = cfg.tdKey; $('fhKey').value = cfg.fhKey;
+    fillIndRows(ind);
     sheet.classList.add('open');
   };
   $('cancelSettings').onclick = () => sheet.classList.remove('open');
   sheet.onclick = e => { if (e.target === sheet) sheet.classList.remove('open'); };
   $('saveSettings').onclick = () => {
-    cfg.src = $('src').value; cfg.tdKey = $('tdKey').value.trim(); cfg.fhKey = $('fhKey').value.trim();
+    ind = readIndRows();
+    store.set('ind', JSON.stringify(ind));
+    buildIndicators();
+    renderIndicators(true);
+
+    const next = { src: $('src').value, tdKey: $('tdKey').value.trim(), fhKey: $('fhKey').value.trim() };
+    const changed = next.src !== cfg.src || next.tdKey !== cfg.tdKey || next.fhKey !== cfg.fhKey;
+    Object.assign(cfg, next);
     store.set('src', cfg.src); store.set('tdKey', cfg.tdKey); store.set('fhKey', cfg.fhKey);
     sheet.classList.remove('open');
     $('notice').classList.remove('show');
-    failCount = 0; hadGap = false;
-    start();
+    if (changed) { failCount = 0; hadGap = false; start(); }
   };
 
   // iPhone はバックグラウンドで通信が切れるので、復帰時に再接続＆過去足を補完
@@ -558,12 +726,13 @@
     }
   }, 5000);
 
+  buildIndicators();
   start();
 
   // 初回：キーが未設定なら設定画面を開く
   const need = cfg.src === 'finnhub' ? !cfg.fhKey : cfg.src === 'twelve' ? !cfg.tdKey : false;
   if (need) {
-    $('notice').innerHTML = 'リアルタイム表示にはAPIキー（無料）が必要です。<br>Finnhub と Twelve Data で無料登録してキーを入力し、「保存して再接続」を押してください。<br>キーなしで試す場合は、データソースを「デモ」にしてください。';
+    $('notice').innerHTML = 'リアルタイム表示にはAPIキー（無料）が必要です。<br>Finnhub と Twelve Data で無料登録してキーを入力し、「保存」を押してください。<br>キーなしで試す場合は、データソースを「デモ」にしてください。';
     $('notice').classList.add('show');
     $('openSettings').click();
   }
