@@ -243,7 +243,7 @@
   const toDisp = b => ({ time: b.time + JST, open: b.open, high: b.high, low: b.low, close: b.close });
 
   function resetData() {
-    TFS.forEach(t => { bars[t.k] = []; loaded[t.k] = false; });
+    TFS.forEach(t => { bars[t.k] = []; loaded[t.k] = false; delete histErr[t.k]; clearTimeout(retryTimer[t.k]); });
     lastPrice = null; sessionOpen = null;
     panes.forEach(p => p.clear());
     $('price').textContent = '---.---'; $('chg').textContent = '';
@@ -446,7 +446,8 @@
         const extra = l.kind === 'mid' ? `(${sdList(l.cfg.sd).map(k => k + 'σ').join(',')})` : '';
         parts.push(`<span style="color:${l.color}">${l.kind === 'ma' ? l.cfg.name + ' ' : ''}${l.label}${extra} ${v == null ? '-' : f3(v)}</span>`);
       }
-      this.el.legend.innerHTML = parts.join('');
+      const err = histErr[this.tf];
+      this.el.legend.innerHTML = (err ? `<span style="color:#f0b429;flex-basis:100%">⚠ ${err}</span>` : '') + parts.join('');
     }
   }
 
@@ -526,25 +527,40 @@
     bars[tfk] = hist;
   }
 
-  const inflight = {};
+  const inflight = {}, retryTimer = {}, lastFetch = {};
+  const histErr = {};   // tf -> 取得できなかった理由（画面に表示し続ける）
+  function setHistErr(tfk, msg) {
+    if (msg) histErr[tfk] = msg; else delete histErr[tfk];
+    panes.forEach(p => { if (p.tf === tfk) p.showLegend(bars[tfk].length - 1); });
+  }
   async function ensureHistory(tfk, force) {
     if ((loaded[tfk] && !force) || inflight[tfk]) return;
+    // 取り直しは同じ時間足で60秒に1回まで（無料プランの回数制限対策）
+    if (force && loaded[tfk] && Date.now() - (lastFetch[tfk] || 0) < 60000) return;
+    clearTimeout(retryTimer[tfk]);
     if (cfg.src === 'demo') {
       bars[tfk] = genHistory(TF[tfk], lastPrice ?? demo.price);
       loaded[tfk] = true;
       return;
     }
-    if (!cfg.tdKey || !TF[tfk].td) return;  // キーなし／秒足：ティックから作った足のみ
-    inflight[tfk] = true;
+    if (!TF[tfk].td) return;  // 秒足：ティックから作った足のみ
+    if (!cfg.tdKey) { setHistErr(tfk, 'Twelve Data のキーが未設定のため過去足なし'); return; }
+    inflight[tfk] = true; lastFetch[tfk] = Date.now();
     const g = gen;
     try {
       const hist = await fetchTwelve(TF[tfk]);
       if (g !== gen) return;
       mergeHistory(tfk, hist);
       loaded[tfk] = true;
+      setHistErr(tfk, null);
       panes.forEach(p => { if (p.tf === tfk) p.render(); });
     } catch (e) {
-      if (g === gen) toast('過去足（' + tfk + '）を取得できません：' + e.message);
+      if (g !== gen) return;
+      // 無料プランの回数制限（1分8回）に当たることがあるので、65秒後に取り直す
+      setHistErr(tfk, '過去足を取得できません（65秒後に再試行）：' + e.message);
+      retryTimer[tfk] = setTimeout(() => {
+        if (g === gen && !loaded[tfk] && (tfk === 'D1' || panes.some(p => p.tf === tfk))) ensureHistory(tfk);
+      }, 65000);
     } finally { inflight[tfk] = false; }
   }
 
@@ -652,6 +668,21 @@
   const bot = new Pane('Bot', BOT_TFS, 'S5', { logo: false });
   const panes = [top, bot];
   setInterval(() => panes.forEach(p => p.countdown()), 1000);
+
+  // iOS のホーム画面アプリでは、画面の高さがステータスバーの分だけ短く伝わり、
+  // 下に余白が残ることがある。その場合は端末の画面サイズに合わせて広げる
+  const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+  function fitScreen() {
+    if (!standalone) return;
+    const portrait = innerHeight >= innerWidth;
+    const screenH = portrait ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
+    const app = $('app');
+    if (screenH > innerHeight) { app.style.bottom = 'auto'; app.style.height = screenH + 'px'; }
+    else { app.style.bottom = ''; app.style.height = ''; }
+  }
+  fitScreen();
+  addEventListener('resize', fitScreen);
+  addEventListener('orientationchange', () => setTimeout(fitScreen, 300));
 
   // ---------- 設定画面 ----------
   const sheet = $('settings');
