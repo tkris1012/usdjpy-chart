@@ -59,7 +59,7 @@
   .num { font-variant-numeric: tabular-nums; }
   .ohlc { flex: none; padding: 0 10px 2px; font-size: 11px; color: var(--sub); height: 16px; white-space: nowrap; overflow: hidden; }
   .ohlc b { color: var(--text); font-weight: 500; }
-  #legend {
+  .legend {
     position: absolute; left: 6px; top: 4px; z-index: 3; pointer-events: none;
     font-size: 10px; line-height: 1.45; display: flex; flex-wrap: wrap; gap: 0 8px; max-width: 78%;
     text-shadow: 0 0 3px #0b0e14, 0 0 3px #0b0e14;
@@ -103,7 +103,7 @@
 </head>
 <body>
 <div id="app">
-  <!-- 上半分：ローソク足 -->
+  <!-- 上半分：1分足以上 -->
   <section class="pane">
     <header>
       <span class="sym">USD/JPY</span>
@@ -113,21 +113,16 @@
       <span class="status"><span class="dot" id="dot"></span><span id="statusText">接続中…</span></span>
       <button class="iconbtn" id="openSettings" aria-label="設定">⚙︎</button>
     </header>
-    <div class="bar" id="tfbar"></div>
-    <div class="ohlc num" id="ohlc"></div>
-    <div class="chart" id="candleChart"><div id="legend" class="num"></div></div>
+    <div class="bar" id="tfbarTop"></div>
+    <div class="ohlc num" id="ohlcTop"></div>
+    <div class="chart" id="chartTop"><div id="legendTop" class="legend num"></div></div>
   </section>
 
-  <!-- 下半分：ティック -->
+  <!-- 下半分：秒足 -->
   <section class="pane">
-    <div class="bar">
-      <span style="color:var(--text);font-weight:600">ティック</span>
-      <span class="num" id="bidask"></span>
-      <span class="spacer"></span>
-      <span class="num" id="tickInfo"></span>
-      <button class="mini" id="toLatest">最新へ</button>
-    </div>
-    <div class="chart" id="tickChart"></div>
+    <div class="bar" id="tfbarBot"></div>
+    <div class="ohlc num" id="ohlcBot"></div>
+    <div class="chart" id="chartBot"><div id="legendBot" class="legend num"></div></div>
   </section>
 </div>
 
@@ -150,7 +145,7 @@
     <p>・Finnhub（<a href="https://finnhub.io" target="_blank" rel="noopener">finnhub.io</a>）の無料キーでは、OANDAのUSD/JPYレートをリアルタイムで受信します。Twelve Dataのキーがない場合は、アプリを開いてからのティックだけで足を作ります。</p>
     <p>・キーはこの端末のブラウザ内（localStorage）にだけ保存され、各データ提供元以外には送信されません。</p>
     <p>・時刻はすべて日本時間で表示します。デモモードの価格は実際のレートではありません。</p>
-    <h3>インジケーター（上のローソク足に表示）</h3>
+    <h3>インジケーター（上下のチャートに表示）</h3>
     <div class="indhead"><span></span><span>名前</span><span>期間</span><span id="indHead4">σ / 種類</span></div>
     <div id="indRows"></div>
     <p>・ボリンジャーバンドの σ は「2」または「1,2,3」のようにカンマ区切りで複数指定できます。</p>
@@ -169,9 +164,13 @@
   'use strict';
   const LWC = window.LightweightCharts;
   const JST = 9 * 3600;               // 表示用に UTC→JST へずらす秒数
-  const MAX_TICKS = 3000;             // ティックチャートに保持する件数
+  const MAX_SEC_BARS = 3000;          // 秒足は直近3000本だけ保持
+  // 秒足は過去データの提供元がないため、受信したティックから作る（td: null）
   const TFS = [
-    { k: 'S1',  s: 1,     td: null    },   // 1秒足：過去データの提供元がないため、ティックから作る
+    { k: 'S1',  s: 1,     td: null    },
+    { k: 'S5',  s: 5,     td: null    },
+    { k: 'S15', s: 15,    td: null    },
+    { k: 'S30', s: 30,    td: null    },
     { k: 'M1',  s: 60,    td: '1min'  },
     { k: 'M5',  s: 300,   td: '5min'  },
     { k: 'M15', s: 900,   td: '15min' },
@@ -181,6 +180,8 @@
     { k: 'D1',  s: 86400, td: '1day'  },
   ];
   const TF = Object.fromEntries(TFS.map(t => [t.k, t]));
+  const TOP_TFS = TFS.filter(t => t.s >= 60).map(t => t.k);   // 上：1分足以上
+  const BOT_TFS = TFS.filter(t => t.s < 60).map(t => t.k);    // 下：秒足
 
   // ---------- 設定 ----------
   const store = {
@@ -191,9 +192,7 @@
     src: store.get('src', 'finnhub'),
     tdKey: store.get('tdKey', ''),
     fhKey: store.get('fhKey', ''),
-    tf: store.get('tf', 'M1'),
   };
-  if (!TF[cfg.tf]) cfg.tf = 'M1';
 
   // ---------- 小物 ----------
   const $ = id => document.getElementById(id);
@@ -201,9 +200,7 @@
   const f3 = v => v.toFixed(3);
   const pad = n => String(n).padStart(2, '0');
   const jst = sec => new Date((sec + JST) * 1000);
-  const fmtHMS = sec => { const d = jst(sec); return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`; };
-  const fmtDT = sec => { const d = jst(sec); return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}${sec % 60 ? ':' + pad(d.getUTCSeconds()) : ''}`; };
-  const MAX_S1 = 3000;   // 1秒足は直近3000本（約50分ぶん）だけ保持
+  const fmtDT = (sec, withSec) => { const d = jst(sec); return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}${withSec ? ':' + pad(d.getUTCSeconds()) : ''}`; };
   const bucket = (t, s) => Math.floor(t / s) * s;
   const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
 
@@ -238,35 +235,6 @@
   };
   const priceFormat = { type: 'price', precision: 3, minMove: 0.001 };
 
-  // 上：ローソク足
-  const cChart = LWC.createChart($('candleChart'), {
-    ...baseOpts,
-    timeScale: { borderColor: '#232a38', timeVisible: true, secondsVisible: false, rightOffset: 4, barSpacing: 7 },
-  });
-  const candles = cChart.addSeries(LWC.CandlestickSeries, {
-    upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
-    wickUpColor: '#26a69a', wickDownColor: '#ef5350', priceFormat,
-  });
-
-  // 下：ティック（時刻が重複するので連番をx軸にし、表示だけ実時刻に変換）
-  let tickSeq = 0;
-  const ticks = [];   // {i, t(UTC秒・小数可), p}
-  const tickTimeOf = i => { const k = i - (ticks.length ? ticks[0].i : 0); return ticks[k] ? ticks[k].t : null; };
-  const tChart = LWC.createChart($('tickChart'), {
-    ...baseOpts,
-    layout: { ...baseOpts.layout, attributionLogo: false },
-    localization: { ...baseOpts.localization, timeFormatter: i => { const t = tickTimeOf(i); return t == null ? '' : fmtHMS(t); } },
-    timeScale: {
-      borderColor: '#232a38', rightOffset: 8, barSpacing: 4, minBarSpacing: 0.3,
-      tickMarkFormatter: i => { const t = tickTimeOf(i); return t == null ? '' : fmtHMS(t); },
-    },
-  });
-  const tickLine = tChart.addSeries(LWC.LineSeries, {
-    color: '#4da3ff', lineWidth: 2, priceFormat,
-    lastPriceAnimation: LWC.LastPriceAnimationMode.OnDataUpdate,
-    crosshairMarkerRadius: 3,
-  });
-
   // ---------- 足データ ----------
   const bars = {};      // tf -> [{time(UTC), open, high, low, close}]
   const loaded = {};    // tf -> 過去足の読み込み済みか
@@ -275,25 +243,9 @@
 
   function resetData() {
     TFS.forEach(t => { bars[t.k] = []; loaded[t.k] = false; });
-    ticks.length = 0; tickSeq = 0; lastPrice = null; sessionOpen = null;
-    candles.setData([]); tickLine.setData([]);
-    lines.forEach(l => l.series.setData([]));
-    $('price').textContent = '---.---'; $('chg').textContent = ''; $('bidask').textContent = '';
-  }
-
-  function renderCandles() {
-    const arr = bars[cfg.tf];
-    candles.setData(arr.map(toDisp));
-    renderIndicators(true);
-    cChart.applyOptions({ timeScale: { timeVisible: TF[cfg.tf].s < 86400, secondsVisible: TF[cfg.tf].s < 60 } });
-    cChart.timeScale().scrollToRealTime();
-    showOHLC(arr[arr.length - 1]);
-  }
-
-  function showOHLC(b) {
-    if (!b) { $('ohlc').textContent = ''; return; }
-    const cls = b.close >= b.open ? 'up' : 'down';
-    $('ohlc').innerHTML = `${fmtDT(b.time)}　O <b>${f3(b.open)}</b> H <b>${f3(b.high)}</b> L <b>${f3(b.low)}</b> C <b class="${cls}">${f3(b.close)}</b>`;
+    lastPrice = null; sessionOpen = null;
+    panes.forEach(p => p.clear());
+    $('price').textContent = '---.---'; $('chg').textContent = '';
   }
 
   // ---------- インジケーター ----------
@@ -320,28 +272,10 @@
   } catch {}
   const sdList = str => [...new Set(String(str).split(/[,、\s]+/).map(Number).filter(v => v > 0 && v <= 5))].sort((a, b) => a - b);
 
-  let lines = [];   // { series, label, color, values: [] }
   const lineOpts = (color, extra) => ({
     color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
     crosshairMarkerVisible: false, priceFormat, ...extra,
   });
-
-  function buildIndicators() {
-    lines.forEach(l => cChart.removeSeries(l.series));
-    lines = [];
-    ind.ma.filter(m => m.on).forEach(m => {
-      lines.push({ kind: 'ma', cfg: m, label: `${m.type}${m.p}`, color: m.color,
-        series: cChart.addSeries(LWC.LineSeries, lineOpts(m.color, { lineWidth: 2 })) });
-    });
-    ind.bb.filter(b => b.on).forEach(b => {
-      lines.push({ kind: 'mid', cfg: b, label: `BB${b.p}`, color: b.color,
-        series: cChart.addSeries(LWC.LineSeries, lineOpts(b.color, { lineStyle: LWC.LineStyle.Dashed })) });
-      sdList(b.sd).forEach(k => {
-        [1, -1].forEach(sign => lines.push({ kind: 'band', cfg: b, k: k * sign, label: `${sign > 0 ? '+' : '−'}${k}σ`, color: b.color,
-          series: cChart.addSeries(LWC.LineSeries, lineOpts(b.color + (k >= 2 ? '' : 'aa'))) }));
-      });
-    });
-  }
 
   function calcMA(arr, p, type) {
     const out = new Array(arr.length).fill(null);
@@ -380,48 +314,144 @@
     return { mid, sd };
   }
 
-  // full=true: 全データを描き直す / false: 最新の足だけ更新
-  function renderIndicators(full) {
-    const arr = bars[cfg.tf];
-    const ma = {}, bb = {};
-    for (const l of lines) {
-      let v;
-      if (l.kind === 'ma') v = ma[l.label] ??= calcMA(arr, l.cfg.p, l.cfg.type);
-      else {
-        const r = bb[l.cfg.p] ??= calcBB(arr, l.cfg.p);
-        v = l.kind === 'mid' ? r.mid : r.mid.map((m, i) => m == null ? null : m + l.k * r.sd[i]);
-      }
-      l.values = v;
-      if (full) {
-        l.series.setData(arr.map((b, i) => v[i] == null ? null : { time: b.time + JST, value: v[i] }).filter(Boolean));
-      } else if (arr.length && v[arr.length - 1] != null) {
-        l.series.update({ time: arr[arr.length - 1].time + JST, value: v[arr.length - 1] });
-      }
+  // ---------- チャート1枚ぶん（上・下で共通） ----------
+  class Pane {
+    constructor(name, tfs, defTf, opts) {
+      this.name = name; this.tfs = tfs;
+      this.tf = store.get('tf' + name, defTf);
+      if (!tfs.includes(this.tf)) this.tf = defTf;
+      this.el = { bar: $('tfbar' + name), ohlc: $('ohlc' + name), legend: $('legend' + name) };
+      this.lines = []; this.crosshairActive = false; this.indTimer = null;
+      this.chart = LWC.createChart($('chart' + name), {
+        ...baseOpts,
+        layout: { ...baseOpts.layout, attributionLogo: !!opts.logo },
+        timeScale: { borderColor: '#232a38', timeVisible: true, secondsVisible: false, rightOffset: 4, barSpacing: 7 },
+      });
+      this.candles = this.chart.addSeries(LWC.CandlestickSeries, {
+        upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
+        wickUpColor: '#26a69a', wickDownColor: '#ef5350', priceFormat,
+      });
+      // 時間足ボタン＋足確定までの残り時間
+      tfs.forEach(k => {
+        const b = document.createElement('button');
+        b.className = 'tf' + (k === this.tf ? ' active' : '');
+        b.textContent = k; b.dataset.tf = k;
+        b.onclick = () => this.selectTF(k);
+        this.el.bar.appendChild(b);
+      });
+      this.cd = document.createElement('span');
+      this.cd.className = 'num'; this.cd.style.cssText = 'flex:none;width:40px;text-align:right;font-size:11px';
+      this.el.bar.appendChild(this.cd);
+      // 指でなぞった位置の値を表示
+      this.chart.subscribeCrosshairMove(param => {
+        const d = param.time != null ? param.seriesData.get(this.candles) : null;
+        this.crosshairActive = !!d;
+        const arr = bars[this.tf];
+        this.showOHLC(d ? { ...d, time: d.time - JST } : arr[arr.length - 1]);
+        let idx = arr.length - 1;
+        if (d) {   // 二分探索で足の位置を求める
+          const t = d.time - JST; let lo = 0, hi = arr.length - 1;
+          while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m].time < t) lo = m + 1; else hi = m; }
+          idx = lo;
+        }
+        this.showLegend(idx);
+      });
     }
-    if (!crosshairActive) showLegend(arr.length - 1);
-  }
 
-  function showLegend(idx) {
-    const parts = [];
-    for (const l of lines) {
-      if (l.kind === 'band') continue;
-      const v = l.values && l.values[idx];
-      const extra = l.kind === 'mid' ? `(${sdList(l.cfg.sd).map(k => k + 'σ').join(',')})` : '';
-      parts.push(`<span style="color:${l.color}">${l.kind === 'ma' ? l.cfg.name + ' ' : ''}${l.label}${extra} ${v == null ? '-' : f3(v)}</span>`);
+    selectTF(k) {
+      this.tf = k; store.set('tf' + this.name, k);
+      [...this.el.bar.querySelectorAll('.tf')].forEach(b => b.classList.toggle('active', b.dataset.tf === k));
+      this.render();
+      ensureHistory(k);
+      if (!TF[k].td && cfg.src !== 'demo' && bars[k].length < 30) toast('秒足は過去データがないため、アプリを開いてから受信したティックで作ります');
     }
-    $('legend').innerHTML = parts.join('');
+
+    render() {
+      const arr = bars[this.tf], s = TF[this.tf].s;
+      this.candles.setData(arr.map(toDisp));
+      this.renderIndicators(true);
+      this.chart.applyOptions({ timeScale: { timeVisible: s < 86400, secondsVisible: s < 60 } });
+      this.chart.timeScale().scrollToRealTime();
+      this.showOHLC(arr[arr.length - 1]);
+    }
+
+    clear() {
+      this.candles.setData([]);
+      this.lines.forEach(l => l.series.setData([]));
+    }
+
+    // 最新の足が更新されたとき
+    onBar(bar) {
+      this.candles.update(toDisp(bar));
+      if (!this.crosshairActive) this.showOHLC(bar);
+      if (!this.indTimer) this.indTimer = setTimeout(() => { this.indTimer = null; this.renderIndicators(false); }, 250);
+    }
+
+    showOHLC(b) {
+      if (!b) { this.el.ohlc.textContent = ''; return; }
+      const cls = b.close >= b.open ? 'up' : 'down';
+      this.el.ohlc.innerHTML = `${fmtDT(b.time, TF[this.tf].s < 60)}　O <b>${f3(b.open)}</b> H <b>${f3(b.high)}</b> L <b>${f3(b.low)}</b> C <b class="${cls}">${f3(b.close)}</b>`;
+    }
+
+    countdown() {
+      const s = TF[this.tf].s, now = Date.now() / 1000;
+      const left = Math.max(0, Math.ceil(bucket(now, s) + s - now));
+      const h = Math.floor(left / 3600), m = Math.floor(left % 3600 / 60), sec = left % 60;
+      this.cd.textContent = h ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
+    }
+
+    buildIndicators() {
+      const add = o => this.chart.addSeries(LWC.LineSeries, o);
+      this.lines.forEach(l => this.chart.removeSeries(l.series));
+      this.lines = [];
+      ind.ma.filter(m => m.on).forEach(m => {
+        this.lines.push({ kind: 'ma', cfg: m, label: `${m.type}${m.p}`, color: m.color, series: add(lineOpts(m.color, { lineWidth: 2 })) });
+      });
+      ind.bb.filter(b => b.on).forEach(b => {
+        this.lines.push({ kind: 'mid', cfg: b, label: `BB${b.p}`, color: b.color, series: add(lineOpts(b.color, { lineStyle: LWC.LineStyle.Dashed })) });
+        sdList(b.sd).forEach(k => {
+          [1, -1].forEach(sign => this.lines.push({ kind: 'band', cfg: b, k: k * sign, color: b.color,
+            series: add(lineOpts(b.color + (k >= 2 ? '' : 'aa'))) }));
+        });
+      });
+    }
+
+    // full=true: 全データを描き直す / false: 最新の足だけ更新
+    renderIndicators(full) {
+      const arr = bars[this.tf];
+      const ma = {}, bb = {};
+      for (const l of this.lines) {
+        let v;
+        if (l.kind === 'ma') v = ma[l.label] ??= calcMA(arr, l.cfg.p, l.cfg.type);
+        else {
+          const r = bb[l.cfg.p] ??= calcBB(arr, l.cfg.p);
+          v = l.kind === 'mid' ? r.mid : r.mid.map((m, i) => m == null ? null : m + l.k * r.sd[i]);
+        }
+        l.values = v;
+        if (full) {
+          l.series.setData(arr.map((b, i) => v[i] == null ? null : { time: b.time + JST, value: v[i] }).filter(Boolean));
+        } else if (arr.length && v[arr.length - 1] != null) {
+          l.series.update({ time: arr[arr.length - 1].time + JST, value: v[arr.length - 1] });
+        }
+      }
+      if (!this.crosshairActive) this.showLegend(arr.length - 1);
+    }
+
+    showLegend(idx) {
+      const parts = [];
+      for (const l of this.lines) {
+        if (l.kind === 'band') continue;
+        const v = l.values && l.values[idx];
+        const extra = l.kind === 'mid' ? `(${sdList(l.cfg.sd).map(k => k + 'σ').join(',')})` : '';
+        parts.push(`<span style="color:${l.color}">${l.kind === 'ma' ? l.cfg.name + ' ' : ''}${l.label}${extra} ${v == null ? '-' : f3(v)}</span>`);
+      }
+      this.el.legend.innerHTML = parts.join('');
+    }
   }
 
-  let indTimer = null;
-  function scheduleIndicators() {
-    if (indTimer) return;
-    indTimer = setTimeout(() => { indTimer = null; renderIndicators(false); }, 250);
-  }
-
-  // 1ティックを全時間足とティックチャートへ反映
-  const tickRate = [];
+  // 1ティックを全時間足へ反映
   let lastTickAt = 0;
-  function applyTick(p, tSec, bid, ask) {
+  function applyTick(p, tSec) {
     p = r3(p);
     if (!isFinite(p) || p <= 0) return;
     lastTickAt = Date.now();
@@ -434,18 +464,9 @@
         last.high = Math.max(last.high, p); last.low = Math.min(last.low, p); last.close = p; bar = last;
       } else if (!last || b > last.time) {
         bar = { time: b, open: p, high: p, low: p, close: p }; arr.push(bar);
-        if (t.s === 1 && arr.length > MAX_S1 + 300) arr.splice(0, arr.length - MAX_S1);
+        if (t.s < 60 && arr.length > MAX_SEC_BARS + 300) arr.splice(0, arr.length - MAX_SEC_BARS);
       } else continue;  // 古いティックは無視
-      if (t.k === cfg.tf) { candles.update(toDisp(bar)); if (!crosshairActive) showOHLC(bar); scheduleIndicators(); }
-    }
-
-    const i = ++tickSeq;
-    ticks.push({ i, t: tSec, p });
-    if (ticks.length > MAX_TICKS + 500) {
-      ticks.splice(0, ticks.length - MAX_TICKS);
-      tickLine.setData(ticks.map(x => ({ time: x.i, value: x.p })));
-    } else {
-      tickLine.update({ time: i, value: p });
+      for (const pane of panes) if (pane.tf === t.k) pane.onBar(bar);
     }
 
     // ヘッダー
@@ -460,12 +481,6 @@
     const diff = p - base;
     $('chg').textContent = `${diff >= 0 ? '+' : ''}${diff.toFixed(3)} (${diff >= 0 ? '+' : ''}${(diff / base * 100).toFixed(2)}%)`;
     $('chg').className = 'chg num ' + (diff >= 0 ? 'up' : 'down');
-    $('bidask').textContent = (bid && ask) ? `B ${f3(bid)} / A ${f3(ask)}` : '';
-
-    const now = Date.now();
-    tickRate.push(now);
-    while (tickRate.length && now - tickRate[0] > 60000) tickRate.shift();
-    $('tickInfo').textContent = `${tickRate.length}回/分`;
   }
 
   // ---------- 過去足 ----------
@@ -518,7 +533,7 @@
       loaded[tfk] = true;
       return;
     }
-    if (!cfg.tdKey || !TF[tfk].td) return;  // キーなし／1秒足：ティックから作った足のみ
+    if (!cfg.tdKey || !TF[tfk].td) return;  // キーなし／秒足：ティックから作った足のみ
     inflight[tfk] = true;
     const g = gen;
     try {
@@ -526,7 +541,7 @@
       if (g !== gen) return;
       mergeHistory(tfk, hist);
       loaded[tfk] = true;
-      if (tfk === cfg.tf) renderCandles();
+      panes.forEach(p => { if (p.tf === tfk) p.render(); });
     } catch (e) {
       if (g === gen) toast('過去足（' + tfk + '）を取得できません：' + e.message);
     } finally { inflight[tfk] = false; }
@@ -544,7 +559,7 @@
       // 平均回帰つきランダムウォーク
       demo.price += gauss() * 0.0035 + (demo.anchor - demo.price) * 0.0005 + (Math.random() < 0.02 ? gauss() * 0.02 : 0);
       const p = r3(demo.price);
-      applyTick(p, Date.now() / 1000, r3(p - 0.002), r3(p + 0.002));
+      applyTick(p, Date.now() / 1000);
       if (g === gen) timer = setTimeout(loop, 120 + Math.random() * 800);
     };
     loop();
@@ -563,7 +578,7 @@
       opened = true; failCount = 0;
       lastTickAt = Date.now();
       onOpen(s);
-      if (hadGap && cfg.tdKey) { hadGap = false; ensureHistory(cfg.tf, true); }
+      if (hadGap && cfg.tdKey) { hadGap = false; ensureHistory(top.tf, true); }
     };
     s.onmessage = ev => { if (g !== gen) return; try { onMsg(JSON.parse(ev.data)); } catch {} };
     s.onclose = () => {
@@ -589,7 +604,7 @@
       d => {
         if (d.event === 'price') {
           setStatus('Twelve Data', 'ok');
-          applyTick(+d.price, d.timestamp ? +d.timestamp : Date.now() / 1000, +d.bid || 0, +d.ask || 0);
+          applyTick(+d.price, d.timestamp ? +d.timestamp : Date.now() / 1000);
         } else if (d.event === 'subscribe-status') {
           if (d.status === 'ok' && (!d.fails || !d.fails.length)) setStatus('Twelve Data 受信待ち', 'ok');
           else setStatus('Twelve Data: 購読失敗（プランを確認）', 'err');
@@ -626,55 +641,16 @@
     stopTicks();
     resetData();
     if (cfg.src === 'demo') TFS.forEach(t => ensureHistory(t.k));
-    else { ensureHistory('D1'); ensureHistory(cfg.tf); }
-    renderCandles();
+    else { ensureHistory('D1'); ensureHistory(top.tf); }
+    panes.forEach(p => p.render());
     connectTicks();
   }
 
-  // ---------- 時間足ボタン＋残り時間 ----------
-  const tfbar = $('tfbar');
-  TFS.forEach(t => {
-    const b = document.createElement('button');
-    b.className = 'tf' + (t.k === cfg.tf ? ' active' : '');
-    b.textContent = t.k; b.dataset.tf = t.k;
-    b.onclick = () => selectTF(t.k);
-    tfbar.appendChild(b);
-  });
-  const cd = document.createElement('span');
-  cd.className = 'num'; cd.style.cssText = 'flex:none;width:40px;text-align:right;font-size:11px';
-  tfbar.appendChild(cd);
-  setInterval(() => {
-    const s = TF[cfg.tf].s, now = Date.now() / 1000;
-    const left = Math.max(0, Math.ceil(bucket(now, s) + s - now));
-    const h = Math.floor(left / 3600), m = Math.floor(left % 3600 / 60), sec = left % 60;
-    cd.textContent = h ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
-  }, 1000);
-
-  function selectTF(k) {
-    cfg.tf = k; store.set('tf', k);
-    [...tfbar.querySelectorAll('.tf')].forEach(b => b.classList.toggle('active', b.dataset.tf === k));
-    renderCandles();
-    ensureHistory(k);
-    if (k === 'S1' && cfg.src !== 'demo' && bars.S1.length < 30) toast('1秒足は過去データがないため、アプリを開いてから受信したティックで作ります');
-  }
-
-  // クロスヘア位置の OHLC を表示
-  let crosshairActive = false;
-  cChart.subscribeCrosshairMove(param => {
-    const d = param.time != null ? param.seriesData.get(candles) : null;
-    crosshairActive = !!d;
-    const arr = bars[cfg.tf];
-    showOHLC(d ? { ...d, time: d.time - JST } : arr[arr.length - 1]);
-    let idx = arr.length - 1;
-    if (d) {   // 二分探索で足の位置を求める
-      const t = d.time - JST; let lo = 0, hi = arr.length - 1;
-      while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m].time < t) lo = m + 1; else hi = m; }
-      idx = lo;
-    }
-    showLegend(idx);
-  });
-
-  $('toLatest').onclick = () => { tChart.timeScale().scrollToRealTime(); cChart.timeScale().scrollToRealTime(); };
+  // ---------- 上下のチャート ----------
+  const top = new Pane('Top', TOP_TFS, 'M1', { logo: true });
+  const bot = new Pane('Bot', BOT_TFS, 'S5', { logo: false });
+  const panes = [top, bot];
+  setInterval(() => panes.forEach(p => p.countdown()), 1000);
 
   // ---------- 設定画面 ----------
   const sheet = $('settings');
@@ -708,8 +684,7 @@
   $('saveSettings').onclick = () => {
     ind = readIndRows();
     store.set('ind2', JSON.stringify(ind));
-    buildIndicators();
-    renderIndicators(true);
+    panes.forEach(p => { p.buildIndicators(); p.renderIndicators(true); });
 
     const next = { src: $('src').value, tdKey: $('tdKey').value.trim(), fhKey: $('fhKey').value.trim() };
     const changed = next.src !== cfg.src || next.tdKey !== cfg.tdKey || next.fhKey !== cfg.fhKey;
@@ -726,7 +701,7 @@
     // 切断済み、または30秒以上受信がない（裏で止まっていた）なら張り直す
     if (!ws || ws.readyState > 1 || (Date.now() - lastTickAt > 30000 && !marketClosed())) {
       hadGap = true; failCount = 0; connectTicks();
-    } else if (cfg.tdKey) ensureHistory(cfg.tf, true);
+    } else if (cfg.tdKey) ensureHistory(top.tf, true);
   });
 
   // 受信が止まっていないか監視
@@ -737,7 +712,7 @@
     }
   }, 5000);
 
-  buildIndicators();
+  panes.forEach(p => p.buildIndicators());
   start();
 
   // 初回：キーが未設定なら設定画面を開く
