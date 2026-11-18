@@ -49,7 +49,7 @@
   .bar { flex: none; display: flex; align-items: center; gap: 4px; padding: 3px 8px; font-size: 12px; color: var(--sub); }
   .tf {
     background: var(--panel); color: var(--sub); border: 1px solid var(--line); border-radius: 6px;
-    font-size: 12px; font-weight: 600; padding: 5px 0; flex: 1 1 0; min-width: 0;
+    font-size: 11.5px; font-weight: 600; padding: 5px 0; flex: 1 1 0; min-width: 0;
   }
   .tf.active { background: var(--accent); border-color: var(--accent); color: #fff; }
   .mini {
@@ -171,6 +171,7 @@
   const JST = 9 * 3600;               // 表示用に UTC→JST へずらす秒数
   const MAX_TICKS = 3000;             // ティックチャートに保持する件数
   const TFS = [
+    { k: 'S1',  s: 1,     td: null    },   // 1秒足：過去データの提供元がないため、ティックから作る
     { k: 'M1',  s: 60,    td: '1min'  },
     { k: 'M5',  s: 300,   td: '5min'  },
     { k: 'M15', s: 900,   td: '15min' },
@@ -201,7 +202,8 @@
   const pad = n => String(n).padStart(2, '0');
   const jst = sec => new Date((sec + JST) * 1000);
   const fmtHMS = sec => { const d = jst(sec); return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`; };
-  const fmtDT = sec => { const d = jst(sec); return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; };
+  const fmtDT = sec => { const d = jst(sec); return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}${sec % 60 ? ':' + pad(d.getUTCSeconds()) : ''}`; };
+  const MAX_S1 = 3000;   // 1秒足は直近3000本（約50分ぶん）だけ保持
   const bucket = (t, s) => Math.floor(t / s) * s;
   const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
 
@@ -283,7 +285,7 @@
     const arr = bars[cfg.tf];
     candles.setData(arr.map(toDisp));
     renderIndicators(true);
-    cChart.applyOptions({ timeScale: { timeVisible: TF[cfg.tf].s < 86400 } });
+    cChart.applyOptions({ timeScale: { timeVisible: TF[cfg.tf].s < 86400, secondsVisible: TF[cfg.tf].s < 60 } });
     cChart.timeScale().scrollToRealTime();
     showOHLC(arr[arr.length - 1]);
   }
@@ -432,6 +434,7 @@
         last.high = Math.max(last.high, p); last.low = Math.min(last.low, p); last.close = p; bar = last;
       } else if (!last || b > last.time) {
         bar = { time: b, open: p, high: p, low: p, close: p }; arr.push(bar);
+        if (t.s === 1 && arr.length > MAX_S1 + 300) arr.splice(0, arr.length - MAX_S1);
       } else continue;  // 古いティックは無視
       if (t.k === cfg.tf) { candles.update(toDisp(bar)); if (!crosshairActive) showOHLC(bar); scheduleIndicators(); }
     }
@@ -515,7 +518,7 @@
       loaded[tfk] = true;
       return;
     }
-    if (!cfg.tdKey) return;  // キーなし：ティックから作った足のみ
+    if (!cfg.tdKey || !TF[tfk].td) return;  // キーなし／1秒足：ティックから作った足のみ
     inflight[tfk] = true;
     const g = gen;
     try {
@@ -638,7 +641,7 @@
     tfbar.appendChild(b);
   });
   const cd = document.createElement('span');
-  cd.className = 'num'; cd.style.cssText = 'flex:none;width:46px;text-align:right;font-size:11px';
+  cd.className = 'num'; cd.style.cssText = 'flex:none;width:40px;text-align:right;font-size:11px';
   tfbar.appendChild(cd);
   setInterval(() => {
     const s = TF[cfg.tf].s, now = Date.now() / 1000;
@@ -652,6 +655,7 @@
     [...tfbar.querySelectorAll('.tf')].forEach(b => b.classList.toggle('active', b.dataset.tf === k));
     renderCandles();
     ensureHistory(k);
+    if (k === 'S1' && cfg.src !== 'demo' && bars.S1.length < 30) toast('1秒足は過去データがないため、アプリを開いてから受信したティックで作ります');
   }
 
   // クロスヘア位置の OHLC を表示
